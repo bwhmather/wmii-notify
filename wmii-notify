@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import itertools
 import logging
+import random
 from subprocess import Popen, PIPE
 
 import dbus
@@ -8,7 +9,6 @@ from dbus import service
 from dbus.mainloop.glib import DBusGMainLoop
 import gobject
 
-_UNSET = object()
 
 BUS_NAME = 'org.freedesktop.Notifications'
 SERVICE_PATH = '/org/freedesktop/Notifications'
@@ -37,54 +37,82 @@ class NotificationService(service.Object):
         return ('body')
 
     @service.method(BUS_NAME, in_signature='susssasa{sv}i', out_signature='u')
-    def Notify(self, app_name, replaces_id, app_icon, summary,
-               body, actions, hints, timeout):
+    def Notify(self, app_name, replaces_id,
+               app_icon, summary, body,
+               actions, hints, timeout):
+
         logging.info("Notify({}, {}, {}, {}, {}, {}, {}, {})".format(
-            app_name, replaces_id, app_icon, summary,
-            body, actions, hints, timeout))
+            app_name, replaces_id,
+            app_icon, summary, body,
+            actions, hints, timeout))
         try:
-            return self._manager.add_notification(
-                summary, body, timeout, hints)
+            return self._manager.add_notification(app_name, replaces_id,
+                                                  app_icon, summary, body,
+                                                  actions, hints, timeout)
         except:
-            logging.exception("Error in Notify")
+            logging.exception("error in Notify")
             raise
 
     @service.method(BUS_NAME, in_signature='u', out_signature='')
     def CloseNotification(self, id):
         logging.info("CloseNotification({})".format(id))
-        self._manager.close_notification(id)
+        try:
+            self._manager.close_notification(id)
+        except:
+            logging.exception("error in CloseNotification")
+            raise
 
     @service.signal(BUS_NAME, signature='uu')
     def NotificationClosed(self, id_in, reason_in):
-        pass
+        logging.info("NotificationClosed({}, {})".format(id_in, reason_in))
 
     @service.signal(BUS_NAME, signature='us')
     def ActionInvoked(self, id_in, action_key_in):
-        pass
+        logging.info("ActionInvoked({}, {})".format(id_in, action_key_in))
 
 
 class NotificationManager(object):
-    def __init__(self):
+    def __init__(self, priority=100,
+                 low_colours=None, normal_colours=None, critical_colours=None):
+
         # iterator providing unique id's for each new notification
         self._notification_id = itertools.count(1)
+
+        # map from notification id's to gobject timeout callback handles
         self._notification_timeouts = {}
+
         self._service = NotificationService(self)
+
+        # number used to determine sort order on bar
         self._priority = 100
-        self._uid = "test"
+
+        # random string to distinguish this notify server from others
+        self._uid = random.randrange(16**8 - 1)
+
+        default_colours = (low_colours or
+                           normal_colours or
+                           critical_colours or
+                           "#ffffff #000000 #aaaaaa")
+        self.colours = (
+            low_colours or default_colours,
+            normal_colours or default_colours,
+            critical_colours or default_colours)
 
     def _notification_filename(self, id):
-        return "/rbar/{:03}-{}-notify-{:08}".format(self._priority,
-                                                    self._uid,
-                                                    id)
+        return "/rbar/{:03}-{:08x}-notify-{:08}".format(self._priority,
+                                                        self._uid,
+                                                        id)
 
-    def add_notification(self, summary, body="", timeout=-1,
-                         hints=None, id=_UNSET):
-        if id is _UNSET:
+    def add_notification(self, app_name, id,
+                         app_icon, summary, body,
+                         actions, hints, timeout):
+        if not id:
             id = next(self._notification_id)
 
         filename = self._notification_filename(id)
 
-        colours = "#eee8d5 #002b36 #073642"
+        urgency = max(0, min(hints.get('urgency', 1), 2))
+        colours = self.colours[urgency]
 
         p = Popen(["wmiir", "create", filename], stdin=PIPE)
         p.communicate(colours.encode("utf-8"))
@@ -114,6 +142,8 @@ class NotificationManager(object):
 
 
 def main():
+    gobject.threads_init()
+
     logging.basicConfig(level=logging.DEBUG)
 
     DBusGMainLoop(set_as_default=True)
