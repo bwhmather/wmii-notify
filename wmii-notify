@@ -21,10 +21,12 @@ REASONS = dict(
 
 
 class NotificationService(service.Object):
-    def __init__(self, manager):
+    def __init__(self, open_notification, close_notification):
+        self._open_notification = open_notification
+        self._close_notification = close_notification
+
         bus_name = service.BusName(BUS_NAME, bus=dbus.SessionBus())
         super(NotificationService, self).__init__(bus_name, SERVICE_PATH)
-        self._manager = manager
 
     @service.method(BUS_NAME, in_signature='', out_signature='ssss')
     def GetServerInformation(self):
@@ -40,15 +42,14 @@ class NotificationService(service.Object):
     def Notify(self, app_name, replaces_id,
                app_icon, summary, body,
                actions, hints, timeout):
-
         logging.info("Notify({}, {}, {}, {}, {}, {}, {}, {})".format(
             app_name, replaces_id,
             app_icon, summary, body,
             actions, hints, timeout))
         try:
-            return self._manager.add_notification(app_name, replaces_id,
-                                                  app_icon, summary, body,
-                                                  actions, hints, timeout)
+            return self._open_notification(app_name, replaces_id,
+                                          app_icon, summary, body,
+                                          actions, hints, timeout)
         except:
             logging.exception("error in Notify")
             raise
@@ -57,7 +58,7 @@ class NotificationService(service.Object):
     def CloseNotification(self, id):
         logging.info("CloseNotification({})".format(id))
         try:
-            self._manager.close_notification(id)
+            self._close_notification(id, "REQUESTED")
         except:
             logging.exception("error in CloseNotification")
             raise
@@ -81,7 +82,8 @@ class NotificationManager(object):
         # map from notification id's to gobject timeout callback handles
         self._notification_timeouts = {}
 
-        self._service = NotificationService(self)
+        self._dbus_service = NotificationService(self.open_notification,
+                                                 self.close_notification)
 
         # number used to determine sort order on bar
         self._priority = 100
@@ -103,7 +105,7 @@ class NotificationManager(object):
                                                         self._uid,
                                                         id)
 
-    def add_notification(self, app_name, id,
+    def open_notification(self, app_name, id,
                          app_icon, summary, body,
                          actions, hints, timeout):
         if not id:
@@ -138,7 +140,7 @@ class NotificationManager(object):
         p = Popen(["wmiir", "remove", filename])
         p.wait(3)
 
-        self._service.NotificationClosed(id, REASONS[reason])
+        self._dbus_service.NotificationClosed(id, REASONS[reason])
 
 
 def main():
