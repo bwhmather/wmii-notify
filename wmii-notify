@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+import itertools
+import logging
+from subprocess import Popen, PIPE
+
+import dbus
+from dbus import service
+from dbus.mainloop.glib import DBusGMainLoop
+import gobject
+
+_UNSET = object()
+
+BUS_NAME = 'org.freedesktop.Notifications'
+SERVICE_PATH = '/org/freedesktop/Notifications'
+
+REASONS = dict(
+    EXPIRED=1,
+    DISMISSED=2,
+    REQUESTED=3,
+    UNDEFINED=4)
+
+
+class NotificationService(service.Object):
+    def __init__(self, manager):
+        bus_name = service.BusName(BUS_NAME, bus=dbus.SessionBus())
+        super(NotificationService, self).__init__(bus_name, SERVICE_PATH)
+        self._manager = manager
+
+    @service.method(BUS_NAME, in_signature='', out_signature='ssss')
+    def GetServerInformation(self):
+        logging.info("GetServerInformation()")
+        return ("wmii-notify-daemon", "wmii", "1.0", "1")
+
+    @service.method(BUS_NAME, in_signature='', out_signature='as')
+    def GetCapabilities(self):
+        logging.info("GetCapabilities()")
+        return ('body')
+
+    @service.method(BUS_NAME, in_signature='susssasa{sv}i', out_signature='u')
+    def Notify(self, app_name, replaces_id, app_icon, summary,
+               body, actions, hints, timeout):
+        logging.info("Notify({}, {}, {}, {}, {}, {}, {}, {})".format(
+            app_name, replaces_id, app_icon, summary,
+            body, actions, hints, timeout))
+        try:
+            return self._manager.add_notification(
+                summary, body, timeout, hints)
+        except:
+            logging.exception("Error in Notify")
+            raise
+
+    @service.method(BUS_NAME, in_signature='u', out_signature='')
+    def CloseNotification(self, id):
+        logging.info("CloseNotification({})".format(id))
+        self._manager.close_notification(id)
+
+    @service.signal(BUS_NAME, signature='uu')
+    def NotificationClosed(self, id_in, reason_in):
+        pass
+
+    @service.signal(BUS_NAME, signature='us')
+    def ActionInvoked(self, id_in, action_key_in):
+        pass
+
+
+class NotificationManager(object):
+    def __init__(self):
+        # iterator providing unique id's for each new notification
+        self._notification_id = itertools.count(1)
+        self._notification_timeouts = {}
+        self._service = NotificationService(self)
+        self._priority = 100
+        self._uid = "test"
+
+    def _notification_filename(self, id):
+        return "/rbar/{:03}-{}-notify-{:08}".format(self._priority,
+                                                    self._uid,
+                                                    id)
+
+    def add_notification(self, summary, body="", timeout=-1,
+                         hints=None, id=_UNSET):
+        if id is _UNSET:
+            id = next(self._notification_id)
+
+        filename = self._notification_filename(id)
+
+        colours = "#eee8d5 #002b36 #073642"
+
+        p = Popen(["wmiir", "create", filename], stdin=PIPE)
+        p.communicate(colours.encode("utf-8"))
+        p.wait(3)
+
+        p = Popen(["wmiir", "write", filename], stdin=PIPE)
+        p.communicate(summary.encode("utf-8"))
+        p.wait(3)
+
+        if timeout > 0:
+            self._notification_timeouts[id] = gobject.timeout_add(
+                timeout, self.close_notification, id, "EXPIRED")
+        return id
+
+    def close_notification(self, id, reason="UNDEFINED"):
+        logging.info("closing notification with id: {}, reason: {}".format(
+            id, reason))
+        if id in self._notification_timeouts:
+            del self._notification_timeouts[id]
+
+        # TODO check if filename exists
+        filename = self._notification_filename(id)
+        p = Popen(["wmiir", "remove", filename])
+        p.wait(3)
+
+        self._service.NotificationClosed(id, REASONS[reason])
+
+
+def main():
+    logging.basicConfig(level=logging.DEBUG)
+
+    DBusGMainLoop(set_as_default=True)
+    NotificationManager()
+
+    mainloop = gobject.MainLoop()
+    mainloop.run()
+
+if __name__ == "__main__":
+    main()
