@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+
+import os
+import io
+import time
+import random
+import argparse
+import logging
+import re
+
+
+parser = argparse.ArgumentParser(
+    description="Display a clock in the wmii menu bar.")
+parser.add_argument(
+    "-v", "--verbose", action="store_true",
+    help="print debug information")
+parser.add_argument(
+    "--format", default="%a, %d %b %Y %H:%M:%S +0000",
+    help="format string for printing the date " +
+    "(see http://docs.python.org/3/library/time.html#time.strftime)")
+parser.add_argument(
+    "--colours", default=None,
+    help="")
+parser.add_argument(
+    "--side", default="right",
+    help="what side of the bar to put the clock")
+parser.add_argument(
+    "--mountpoint", metavar="DIR", default=None,
+    help="path to the root of the wmii filesystem")
+parser.add_argument(
+    "--priority", metavar="N", type=int, default=900,
+    help="three digit number used to determine where the clock is " +
+    "positioned on the menubar relative to other widgets")
+
+args = parser.parse_args()
+
+if args.verbose:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+if args.mountpoint is None:
+    mountpoint = "/tmp/ns.{user}.{display}/wmii-mount".format(
+        display=re.sub(r"\.0$", "", os.environ.get("DISPLAY")),
+        user=os.environ.get("USER"))
+else:
+    mountpoint = os.path.abspath(args.mountpoint)
+
+if args.side not in ("left", "right"):
+    raise Exception(
+        "side should be either 'left' or 'right'")
+bar = {
+    "left": "lbar",
+    "right": "rbar",
+}[args.side]
+
+priority = args.priority
+if priority < 0 or priority > 999:
+    raise Exception(
+        "priority should be an integer between 0 and 999")
+
+uid = random.randrange(16**8 - 1)
+
+filename = "{priority:03}-{uid:08x}-clock".format(
+    priority=priority,
+    uid=uid,
+    id=id)
+
+filepath = os.path.join(mountpoint, bar, filename)
+
+colours = args.colours
+if colours is None:
+    colours = os.environ.get("WMII_NORMCOLORS", "#ffffff #000000 #aaaaaa")
+
+try:
+    with io.open(filepath, 'w', encoding="utf-8") as button:
+        while True:
+            button.seek(0)
+            button.write("{} {}\n".format(colours, time.strftime(args.format)))
+            time.sleep(1)
+except KeyboardInterrupt:
+    pass
+finally:
+    os.unlink(filepath)
