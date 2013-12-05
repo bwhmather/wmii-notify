@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+import os
+import io
+import time
+import random
+import argparse
+import logging
+import re
+import math
+
+
+battery_re = re.compile("BAT[0-9]+")
+
+parser = argparse.ArgumentParser(
+    description="Displays battery status in the wmii menu bar.")
+parser.add_argument(
+    "-v", "--verbose", action="store_true",
+    help="print debug information")
+parser.add_argument(
+    "--colours", default=None,
+    help="")
+parser.add_argument(
+    "--side", default="right",
+    help="what side of the bar to put the monitor widget")
+parser.add_argument(
+    "--mountpoint", metavar="DIR", default=None,
+    help="path to the root of the wmii filesystem")
+parser.add_argument(
+    "--priority", metavar="N", type=int, default=800,
+    help="three digit number used to determine where the monitor is " +
+    "positioned on the menubar relative to other widgets")
+parser.add_argument(
+    "--interval", metavar="T", type=float, default=4,
+    help="time in seconds between updates")
+
+args = parser.parse_args()
+
+if args.verbose:
+    logging.basicConfig(level=logging.DEBUG)
+else:
+    logging.basicConfig(level=logging.INFO)
+
+if args.mountpoint is None:
+    mountpoint = "/tmp/ns.{user}.{display}/wmii-mount".format(
+        display=re.sub(r"\.0$", "", os.environ.get("DISPLAY")),
+        user=os.environ.get("USER"))
+else:
+    mountpoint = os.path.abspath(args.mountpoint)
+
+if args.side not in ("left", "right"):
+    raise Exception(
+        "side should be either 'left' or 'right'")
+bar = {
+    "left": "lbar",
+    "right": "rbar",
+}[args.side]
+
+priority = args.priority
+if priority < 0 or priority > 999:
+    raise Exception(
+        "priority should be an integer between 0 and 999")
+
+uid = random.randrange(16**8 - 1)
+
+colours = args.colours
+if colours is None:
+    colours = os.environ.get("WMII_NORMCOLORS", "#ffffff #000000 #aaaaaa")
+
+button_fmt = "Battery {num}: {status}, {percentage}%, {hrs}:{mins:02} remaining"
+
+
+def button_path(battery):
+    filename = "{priority:03}-{uid:08x}-battery-{id}".format(
+        priority=priority,
+        uid=uid,
+        id=battery)
+
+    return os.path.join(mountpoint, bar, filename)
+
+
+def read_attr(battery, attr):
+    filepath = os.path.join("/sys/class/power_supply", battery, attr)
+    with io.open(filepath, "r", encoding="utf-8") as f:
+        return f.read()
+
+buttons = {}
+
+try:
+    while True:
+        devices = os.listdir("/sys/class/power_supply")
+        batteries = set(filter(battery_re.match, devices))
+
+        for battery in set(buttons) - batteries:
+            buttons[battery].close()
+            os.unlink(button_path(battery))
+            del buttons[battery]
+
+        for battery in batteries - set(buttons):
+            buttons[battery] = io.open(button_path(battery), "w",
+                                       encoding="utf-8")
+
+        for battery in batteries:
+            num = int(battery[3:])
+            energy_full = int(read_attr(battery, "energy_full"))
+            energy_now = int(read_attr(battery, "energy_now"))
+            power_now = int(read_attr(battery, "power_now"))
+            status = read_attr(battery, "status").rstrip()
+
+            energy_percent = 100 * energy_now/energy_full
+
+            hours = energy_now/power_now
+            fhours, hours = math.modf(hours)
+            minutes = math.floor(60*fhours)
+
+            string = button_fmt.format(
+                num=num,
+                status=status,
+                percentage=int(energy_percent),
+                hrs=int(hours), mins=int(minutes)
+                )
+
+            buttons[battery].seek(0)
+            buttons[battery].write("{} {}\n".format(colours, string))
+
+            time.sleep(args.interval)
+
+except KeyboardInterrupt:
+    pass
+finally:
+    for battery, button in buttons.items():
+        button.close()
+        os.unlink(button_path(battery))
