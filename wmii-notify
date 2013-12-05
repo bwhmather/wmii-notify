@@ -82,7 +82,8 @@ class NotificationService(service.Object):
 
 class NotificationManager(object):
     def __init__(self, mountpoint, side="right", priority=100,
-                 low_colours=None, normal_colours=None, critical_colours=None):
+                 low_colours=None, normal_colours=None, critical_colours=None,
+                 show_body=True):
         # random string to distinguish this notify server from others
         self._uid = random.randrange(16**8 - 1)
 
@@ -105,6 +106,8 @@ class NotificationManager(object):
             low_colours or default_colours,
             normal_colours or default_colours,
             critical_colours or default_colours)
+
+        self.show_body = show_body
 
         self._actions = Queue()
         self._dbus_service = NotificationService(self.open_notification,
@@ -162,8 +165,13 @@ class NotificationManager(object):
         urgency = max(0, min(hints.get('urgency', 1), 2))
         colours = self.colours[urgency]
 
+        if self.show_body and body and len(body):
+            text = "{}: {}".format(summary, body)
+        else:
+            text = summary
+
         with io.open(filename, "wb") as button:
-            button.write(" ".join([colours, summary]).encode("utf-8"))
+            button.write(" ".join([colours, text]).encode("utf-8"))
 
         if timeout > 0:
             self._notification_timeouts[id] = gobject.timeout_add(
@@ -204,6 +212,9 @@ def main():
         "--side", default="right",
         help="what side of the bar to put notifications")
     parser.add_argument(
+        "-b", "--show-body", action="store_true",
+        help="show the body of a notification instead of just the summary")
+    parser.add_argument(
         "--mountpoint", metavar="DIR", default=None,
         help="the path of the root of the wmii filesystem is located")
     parser.add_argument(
@@ -237,7 +248,8 @@ def main():
     gobject.threads_init()
     DBusGMainLoop(set_as_default=True)
 
-    NotificationManager(mountpoint=mountpoint, side=side, priority=priority)
+    NotificationManager(mountpoint=mountpoint, side=side, priority=priority,
+                        show_body=args.show_body)
 
     mainloop = gobject.MainLoop()
     mainloop.run()
