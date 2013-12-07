@@ -66,8 +66,6 @@ colours = args.colours
 if colours is None:
     colours = os.environ.get("WMII_NORMCOLORS", "#ffffff #000000 #aaaaaa")
 
-button_fmt = "Battery {num}: {status}, {percentage}%, {hrs}:{mins:02} remaining"
-
 
 def button_path(battery):
     filename = "{priority:03}-{uid:08x}-battery-{id}".format(
@@ -108,16 +106,21 @@ try:
 
             energy_percent = 100 * energy_now/energy_full
 
-            hours = energy_now/power_now
-            fhours, hours = math.modf(hours)
-            minutes = math.floor(60*fhours)
-
+            button_fmt = "Battery {num}: {status}, {percentage}%"
             string = button_fmt.format(
                 num=num,
                 status=status,
-                percentage=int(energy_percent),
-                hrs=int(hours), mins=int(minutes)
+                percentage=int(energy_percent)
                 )
+
+            if not status == "Charged" and not power_now == 0:
+                hours = energy_now/power_now
+                fhours, hours = math.modf(hours)
+                minutes = math.floor(60*fhours)
+
+                string += ", {hrs}:{mins:02} remaining".format(
+                    hrs=int(hours), mins=int(minutes)
+                    )
 
             buttons[battery].seek(0)
             buttons[battery].write("{} {}\n".format(colours, string))
